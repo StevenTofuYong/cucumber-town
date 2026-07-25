@@ -11,8 +11,8 @@ const params = new URLSearchParams(location.search)
 const TEST_MODE = params.get('test') === '1'
 
 const SHIRT_COLORS = [0xe53e3e, 0x3182ce, 0x38a169, 0xd69e2e, 0x805ad5, 0xdd6b20, 0x319795, 0xd53f8c]
-const SKIN = 0xffd9a0
-const PANTS = 0x2d3748
+const SKIN = 0xf5cd30      // classic Roblox yellow
+const PANTS = 0x2f5d8c     // blue jeans
 
 // ---------- renderer / scene ----------
 const canvas = document.getElementById('game')
@@ -28,11 +28,18 @@ scene.fog = new THREE.Fog(0x87ceeb, 90, 220)
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 500)
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight
+// on a tall phone screen a 60° vertical view crops the world to a slit —
+// widen the lens so you can still see what's around you
+function fitCamera() {
+  const aspect = innerWidth / innerHeight
+  camera.aspect = aspect
+  camera.fov = aspect < 1 ? Math.min(80, 60 / Math.max(0.5, aspect)) : 60
   camera.updateProjectionMatrix()
   renderer.setSize(innerWidth, innerHeight)
-})
+}
+addEventListener('resize', fitCamera)
+addEventListener('orientationchange', () => setTimeout(fitCamera, 200))
+fitCamera()
 
 // ---------- lights ----------
 scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x6a8f5f, 1.1))
@@ -470,6 +477,45 @@ function showBubble(sp, text) {
   sp.userData.until = performance.now() + 4500
 }
 
+// the classic smiley face, drawn onto a canvas and stuck on the front of the head
+function makeFaceTexture(asleep) {
+  const cv = document.createElement('canvas')
+  cv.width = cv.height = 128
+  const c = cv.getContext('2d')
+  c.fillStyle = '#f5cd30'
+  c.fillRect(0, 0, 128, 128)
+  c.fillStyle = '#1a1a1a'
+  if (asleep) {
+    // two closed eyes: little downward arcs
+    c.lineWidth = 6
+    c.strokeStyle = '#1a1a1a'
+    c.lineCap = 'round'
+    for (const ex of [42, 86]) {
+      c.beginPath()
+      c.arc(ex, 52, 11, 0.15 * Math.PI, 0.85 * Math.PI)
+      c.stroke()
+    }
+  } else {
+    for (const ex of [42, 86]) {
+      c.beginPath()
+      c.ellipse(ex, 50, 8, 12, 0, 0, Math.PI * 2)
+      c.fill()
+    }
+  }
+  // wide friendly smile
+  c.lineWidth = 7
+  c.strokeStyle = '#1a1a1a'
+  c.lineCap = 'round'
+  c.beginPath()
+  c.arc(64, 74, 22, 0.12 * Math.PI, 0.88 * Math.PI)
+  c.stroke()
+  const tex = new THREE.CanvasTexture(cv)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+const FACE_AWAKE = makeFaceTexture(false)
+const FACE_ASLEEP = makeFaceTexture(true)
+
 function makeAvatar(shirtHex, name) {
   const g = new THREE.Group()          // outer: position + facing (name tag lives here)
   const body = new THREE.Group()       // inner: everything that tips/sinks when you sit or lie down
@@ -484,16 +530,17 @@ function makeAvatar(shirtHex, name) {
     m.castShadow = true
     return m
   }
+  // Roblox R6-ish proportions: chunky torso, blocky limbs flush to the body
   // legs: hip joint + knee joint so they can fold into a sitting pose
   const makeLeg = side => {
     const hip = new THREE.Group()
-    hip.position.set(side * 0.24, 0.9, 0)
-    const thighGeo = new THREE.BoxGeometry(0.42, 0.46, 0.45)
+    hip.position.set(side * 0.27, 0.9, 0)
+    const thighGeo = new THREE.BoxGeometry(0.5, 0.46, 0.5)
     thighGeo.translate(0, -0.23, 0)
     hip.add(mk(thighGeo, pants))
     const knee = new THREE.Group()
     knee.position.y = -0.46
-    const shinGeo = new THREE.BoxGeometry(0.42, 0.46, 0.45)
+    const shinGeo = new THREE.BoxGeometry(0.5, 0.46, 0.5)
     shinGeo.translate(0, -0.23, 0)
     knee.add(mk(shinGeo, pants))
     hip.add(knee)
@@ -503,40 +550,32 @@ function makeAvatar(shirtHex, name) {
   const lLeg = makeLeg(-1)
   const rLeg = makeLeg(1)
   // torso
-  const torso = mk(new THREE.BoxGeometry(1, 1.1, 0.55), shirt)
-  torso.position.y = 1.45
-  // arms (pivot at shoulder)
-  const armGeo = new THREE.BoxGeometry(0.32, 1.05, 0.4)
+  const torso = mk(new THREE.BoxGeometry(1.05, 1.05, 0.55), shirt)
+  torso.position.y = 1.42
+  // arms (pivot at shoulder), flush against the torso like a Roblox character
+  const armGeo = new THREE.BoxGeometry(0.5, 1.05, 0.5)
   armGeo.translate(0, -0.52, 0)
-  const lArm = mk(armGeo, skin); lArm.position.set(-0.68, 1.95, 0)
-  const rArm = mk(armGeo.clone(), skin); rArm.position.set(0.68, 1.95, 0)
-  // head + face
-  const head = mk(new THREE.BoxGeometry(0.8, 0.8, 0.8), skin)
-  head.position.y = 2.45
-  const eyeMat = new THREE.MeshBasicMaterial({color: 0x1a202c})
-  const eyes = []
-  for (const ex of [-0.18, 0.18]) {
-    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.05), eyeMat)
-    eye.position.set(ex, 2.52, 0.41)
-    eyes.push(eye)
-    body.add(eye)
-  }
-  const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.06, 0.05), eyeMat)
-  mouth.position.set(0, 2.25, 0.41)
-  body.add(mouth)
+  const lArm = mk(armGeo, skin); lArm.position.set(-0.78, 1.94, 0)
+  const rArm = mk(armGeo.clone(), skin); rArm.position.set(0.78, 1.94, 0)
+  // head: yellow block with the smiley face on the front
+  const faceMat = new THREE.MeshLambertMaterial({map: FACE_AWAKE})
+  const headMats = [skin, skin, skin, skin, faceMat, skin]   // +x -x +y -y +z(front) -z
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.8, 0.8), headMats)
+  head.castShadow = true
+  head.position.y = 2.34
 
   body.add(torso, lArm, rArm, head)
   body.rotation.order = 'YXZ'
 
   const tag = makeNameSprite(name)
-  tag.position.y = 3.4
+  tag.position.y = 3.25
   g.add(tag)
   const bubble = makeBubbleSprite()
-  bubble.position.y = 4.3
+  bubble.position.y = 4.1
   g.add(bubble)
 
   scene.add(g)
-  return {group: g, body, lArm, rArm, lLeg, rLeg, eyes, bubble, torso, tag, walkT: 0}
+  return {group: g, body, lArm, rArm, lLeg, rLeg, faceMat, bubble, torso, head, tag, walkT: 0}
 }
 
 // what a character is currently doing
@@ -551,7 +590,11 @@ function animateWalk(av, moving, dt, speedScale = 1, swimming = false, pose = PO
   if (av.hidden !== hidden) { av.body.visible = !hidden; av.hidden = hidden }
   // eyes shut while asleep
   const sleepy = pose === POSE.SLEEP
-  if (av.sleepy !== sleepy) { av.eyes.forEach(e => { e.scale.y = sleepy ? 0.15 : 1 }); av.sleepy = sleepy }
+  if (av.sleepy !== sleepy) {
+    av.faceMat.map = sleepy ? FACE_ASLEEP : FACE_AWAKE
+    av.faceMat.needsUpdate = true
+    av.sleepy = sleepy
+  }
 
   // sink/tip the body into the seat or bed
   av.body.position.y += (bodyY - av.body.position.y) * k
@@ -685,13 +728,17 @@ function interact() {
 const promptEl = () => document.getElementById('prompt')
 function updatePrompt() {
   const el = promptEl()
+  const press = IS_TOUCH ? 'Tap' : 'Press'
   let text = ''
-  if (myPose === POSE.DRIVE) text = 'Press <b>E</b> to get out &nbsp;·&nbsp; <b>W/S</b> drive, <b>A/D</b> steer'
-  else if (myPose === POSE.SIT) text = 'Press <b>E</b> to stand up'
-  else if (myPose === POSE.SLEEP) text = 'Press <b>E</b> to wake up'
+  if (myPose === POSE.DRIVE) {
+    text = IS_TOUCH
+      ? 'Tap <b>E</b> to get out &nbsp;·&nbsp; joystick to drive'
+      : 'Press <b>E</b> to get out &nbsp;·&nbsp; <b>W/S</b> drive, <b>A/D</b> steer'
+  } else if (myPose === POSE.SIT) text = press + ' <b>E</b> to stand up'
+  else if (myPose === POSE.SLEEP) text = press + ' <b>E</b> to wake up'
   else {
     const s = nearestSpot()
-    if (s) text = 'Press <b>E</b> to ' + s.label
+    if (s) text = press + ' <b>E</b> to ' + s.label
   }
   el.style.display = text ? 'block' : 'none'
   if (text && el.innerHTML !== text) el.innerHTML = text
@@ -700,16 +747,12 @@ function updatePrompt() {
 // car physics — the car body is long along its own x, so forward is (cos, -sin)
 function driveCar(dt) {
   const car = myCar
-  let throttle = 0
-  if (keys.KeyW || keys.ArrowUp) throttle += 1
-  if (keys.KeyS || keys.ArrowDown) throttle -= 1
-  let steer = 0
-  if (keys.KeyA || keys.ArrowLeft) steer += 1
-  if (keys.KeyD || keys.ArrowRight) steer -= 1
+  const throttle = -axisZ()   // push the stick / W forward to accelerate
+  const steer = -axisX()      // left on the stick / A steers left
 
-  const maxSpeed = (keys.ShiftLeft || keys.ShiftRight) ? 24 : 15
+  const maxSpeed = wantsToRun() ? 24 : 15
   car.speed += throttle * 13 * dt
-  car.speed *= 1 - dt * (throttle === 0 ? 1.8 : 0.4)
+  car.speed *= 1 - dt * (Math.abs(throttle) < 0.05 ? 1.8 : 0.4)
   car.speed = Math.max(-8, Math.min(maxSpeed, car.speed))
   if (Math.abs(car.speed) > 0.2) {
     const grip = Math.min(1, Math.abs(car.speed) / 7)
@@ -735,12 +778,16 @@ function driveCar(dt) {
   camYaw += d * Math.min(1, dt * 2.5)
 }
 
-// mouse-drag camera
-let dragging = false, lastX = 0, lastY = 0
-canvas.addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY })
-addEventListener('pointerup', () => { dragging = false })
+// drag to look around — tracks one pointer so a second finger can work the joystick
+let dragId = null, lastX = 0, lastY = 0
+canvas.addEventListener('pointerdown', e => {
+  if (dragId !== null) return
+  dragId = e.pointerId; lastX = e.clientX; lastY = e.clientY
+})
+addEventListener('pointerup', e => { if (e.pointerId === dragId) dragId = null })
+addEventListener('pointercancel', e => { if (e.pointerId === dragId) dragId = null })
 addEventListener('pointermove', e => {
-  if (!dragging) return
+  if (e.pointerId !== dragId) return
   camYaw -= (e.clientX - lastX) * 0.005
   camPitch = Math.min(1.2, Math.max(-0.1, camPitch + (e.clientY - lastY) * 0.004))
   lastX = e.clientX; lastY = e.clientY
@@ -748,6 +795,112 @@ addEventListener('pointermove', e => {
 addEventListener('wheel', e => {
   camDist = Math.min(16, Math.max(4, camDist + e.deltaY * 0.01))
 })
+// pinch to zoom
+let pinchStart = null
+canvas.addEventListener('touchmove', e => {
+  if (e.touches.length !== 2) { pinchStart = null; return }
+  const d = Math.hypot(
+    e.touches[0].clientX - e.touches[1].clientX,
+    e.touches[0].clientY - e.touches[1].clientY
+  )
+  if (pinchStart === null) { pinchStart = {d, dist: camDist}; return }
+  camDist = Math.min(16, Math.max(4, pinchStart.dist * (pinchStart.d / d)))
+}, {passive: true})
+canvas.addEventListener('touchend', () => { pinchStart = null })
+
+// ---------- touch controls ----------
+const IS_TOUCH = params.get('touch') === '1' ||
+  (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) ||
+  'ontouchstart' in window
+const stick = {x: 0, y: 0, run: false}
+let jumpQueued = false
+let resetStick = () => { stick.x = 0; stick.y = 0 }
+
+// Never keep walking on your own: if the window loses focus, the tab is hidden,
+// or a touch ends anywhere, drop every held key and re-centre the joystick.
+function clearInput() {
+  for (const k of Object.keys(keys)) keys[k] = false
+  resetStick()
+}
+addEventListener('blur', clearInput)
+addEventListener('contextmenu', clearInput)
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearInput() })
+// safety net: if the joystick's own finger lifts anywhere on the page, re-centre it
+// (but don't cancel it when a *second* finger — the camera drag — is released)
+let stickPointerId = null
+const releaseIfStick = e => { if (stickPointerId !== null && e.pointerId === stickPointerId) resetStick() }
+addEventListener('pointerup', releaseIfStick)
+addEventListener('pointercancel', releaseIfStick)
+
+function setupTouchControls() {
+  document.body.classList.add('touch')
+  const pad = document.getElementById('stick')
+  const nub = document.getElementById('stickNub')
+  const R = 46 // how far the nub travels
+
+  const moveNub = (dx, dy) => {
+    const d = Math.hypot(dx, dy)
+    const s = d > R ? R / d : 1
+    nub.style.transform = `translate(${dx * s}px, ${dy * s}px)`
+    stick.x = Math.max(-1, Math.min(1, dx / R))
+    stick.y = Math.max(-1, Math.min(1, dy / R))
+  }
+  const resetNub = () => {
+    nub.style.transform = ''
+    stick.x = 0; stick.y = 0
+    stickPointerId = null
+  }
+  resetStick = resetNub
+  pad.addEventListener('pointerdown', e => {
+    stickPointerId = e.pointerId
+    try { pad.setPointerCapture(e.pointerId) } catch (_) {}
+    const r = pad.getBoundingClientRect()
+    moveNub(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2))
+    e.preventDefault()
+  })
+  pad.addEventListener('pointermove', e => {
+    if (e.pointerId !== stickPointerId) return
+    const r = pad.getBoundingClientRect()
+    moveNub(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2))
+  })
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']) {
+    pad.addEventListener(ev, e => { if (e.pointerId === stickPointerId) resetNub() })
+  }
+
+  const hold = (id, down, up) => {
+    const el = document.getElementById(id)
+    el.addEventListener('pointerdown', e => { e.preventDefault(); el.classList.add('on'); down() })
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+      el.addEventListener(ev, () => { el.classList.remove('on'); if (up) up() })
+    }
+  }
+  // latched so even a very quick tap always registers as one jump
+  hold('btnJump', () => { keys.Space = true; jumpQueued = true }, () => { keys.Space = false })
+  hold('btnE', () => { if (me) interact() })
+  hold('btnChat', () => { toggleChat() })
+
+  const runBtn = document.getElementById('btnRun')
+  runBtn.addEventListener('pointerdown', e => {
+    e.preventDefault()
+    stick.run = !stick.run
+    runBtn.classList.toggle('on', stick.run)
+  })
+}
+
+// movement axes: keyboard and joystick added together
+function axisX() {
+  let v = 0
+  if (keys.KeyA || keys.ArrowLeft) v -= 1
+  if (keys.KeyD || keys.ArrowRight) v += 1
+  return Math.max(-1, Math.min(1, v + stick.x))
+}
+function axisZ() {
+  let v = 0
+  if (keys.KeyW || keys.ArrowUp) v -= 1
+  if (keys.KeyS || keys.ArrowDown) v += 1
+  return Math.max(-1, Math.min(1, v + stick.y))
+}
+const wantsToRun = () => keys.ShiftLeft || keys.ShiftRight || stick.run
 
 function collide() {
   const r = 0.75
@@ -795,7 +948,9 @@ function setStatus(t, ok) {
 
 function updateCount() {
   const n = peers.size + 1
-  $('playerCount').textContent = n === 1 ? '1 player (just you so far)' : n + ' players'
+  $('playerCount').textContent = n === 1
+    ? (innerWidth < 820 ? '1 player' : '1 player (just you so far)')
+    : n + ' players'
 }
 
 function addChatLine(html, sys) {
@@ -895,31 +1050,38 @@ function packState() {
 
 let chatOpen = false
 const chatInput = $('chatInput')
+
+function openChat() {
+  chatOpen = true
+  chatInput.style.display = 'block'
+  chatInput.focus()
+}
+function closeChat() {
+  chatInput.value = ''
+  chatInput.blur()
+  chatInput.style.display = 'none'
+  chatOpen = false
+}
+function sendChat() {
+  const text = chatInput.value.trim().slice(0, 120)
+  if (text) {
+    addChatLine('<b>' + esc(myName) + ':</b> ' + esc(text))
+    if (me) showBubble(me.bubble, text)
+    if (sendChatMsg) sendChatMsg(text)
+  }
+  closeChat()
+}
+function toggleChat() {
+  if (!me) return
+  if (chatOpen) sendChat(); else openChat()
+}
+
 addEventListener('keydown', e => {
   if (!me) return
   if (e.code === 'Enter') {
-    if (!chatOpen) {
-      chatOpen = true
-      chatInput.style.display = 'block'
-      chatInput.focus()
-      e.preventDefault()
-    } else {
-      const text = chatInput.value.trim().slice(0, 120)
-      if (text) {
-        addChatLine('<b>' + esc(myName) + ':</b> ' + esc(text))
-        showBubble(me.bubble, text)
-        if (sendChatMsg) sendChatMsg(text)
-      }
-      chatInput.value = ''
-      chatInput.blur()
-      chatInput.style.display = 'none'
-      chatOpen = false
-    }
+    if (!chatOpen) { openChat(); e.preventDefault() } else sendChat()
   } else if (e.code === 'Escape' && chatOpen) {
-    chatInput.value = ''
-    chatInput.blur()
-    chatInput.style.display = 'none'
-    chatOpen = false
+    closeChat()
   }
 })
 
@@ -951,9 +1113,14 @@ function startGame() {
 
   startEl.style.display = 'none'
   for (const id of ['roomInfo', 'help', 'chat', 'status']) $(id).style.display = 'block'
-  addChatLine('Tip: walk up to a <b>chair</b>, <b>bed</b> or <b>car</b> and press <b>E</b> 🚗', true)
+  addChatLine('Tip: go up to a <b>chair</b>, <b>bed</b> or <b>car</b> and ' +
+    (IS_TOUCH ? 'tap' : 'press') + ' <b>E</b> 🚗', true)
   $('roomName').textContent = roomCode
   updateCount()
+
+  if (IS_TOUCH) setupTouchControls()
+  if (innerHeight > innerWidth) camDist = 12   // stand further back on a portrait screen
+  fitCamera()
 
   me = makeAvatar(SHIRT_COLORS[myColorIdx], myName)
   me.group.position.copy(pos)
@@ -971,7 +1138,7 @@ function startGame() {
       x: +pos.x.toFixed(2), y: +pos.y.toFixed(2), z: +pos.z.toFixed(2),
       swim: isSwimming, moving: isMoving,
       indoors: !!insideHouse, roofHidden: insideHouse ? !insideHouse.roof.visible : null,
-      pose: myPose, bodyY: +myBodyY.toFixed(2),
+      pose: myPose, bodyY: +myBodyY.toFixed(2), touch: IS_TOUCH, stick: [stick.x, stick.y, stick.run],
       car: myCar ? {idx: myCar.idx, x: +myCar.x.toFixed(1), z: +myCar.z.toFixed(1), spd: +myCar.speed.toFixed(1)} : null,
       nearSpot: (() => { const s = nearestSpot(); return s ? s.label : null })(),
       cam: [+camera.position.x.toFixed(2), +camera.position.y.toFixed(2), +camera.position.z.toFixed(2)],
@@ -1060,26 +1227,22 @@ function tick() {
   const dt = Math.min(clock.getDelta(), 0.05)
 
   if (me) {
-    const running = keys.ShiftLeft || keys.ShiftRight
+    const running = wantsToRun()
     if (myPose === POSE.DRIVE) {
       isSwimming = false
       driveCar(dt)
     } else if (myPose === POSE.SIT || myPose === POSE.SLEEP) {
-      // seated: any movement key gets you back up
+      // seated: any movement input gets you back up
       isSwimming = false
       isMoving = false
-      if (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD ||
-          keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight || keys.Space) getUp()
+      if (Math.abs(axisX()) > 0.3 || Math.abs(axisZ()) > 0.3 || keys.Space || jumpQueued) { jumpQueued = false; getUp() }
     } else {
-      // input → movement relative to camera
-      let ix = 0, iz = 0
-      if (keys.KeyW || keys.ArrowUp) iz -= 1
-      if (keys.KeyS || keys.ArrowDown) iz += 1
-      if (keys.KeyA || keys.ArrowLeft) ix -= 1
-      if (keys.KeyD || keys.ArrowRight) ix += 1
+      // input → movement relative to camera (keyboard and joystick both feed in here)
+      const ix = axisX(), iz = axisZ()
+      const mag = Math.min(1, Math.hypot(ix, iz))
       isSwimming = Math.hypot(pos.x - POND.x, pos.z - POND.z) < POND.r - 0.4
-      const speed = isSwimming ? 3.2 : (running ? 10 : 5.5)
-      isMoving = (ix !== 0 || iz !== 0)
+      const speed = (isSwimming ? 3.2 : (running ? 10 : 5.5)) * mag
+      isMoving = mag > 0.08
       if (isMoving) {
         const ang = Math.atan2(ix, iz)
         const moveAng = camYaw + ang
@@ -1089,7 +1252,8 @@ function tick() {
       }
       // jump + gravity + swimming depth
       const floorY = isSwimming ? (isMoving ? -0.9 : -1.5) : 0
-      if ((keys.Space) && grounded) { vy = isSwimming ? 7 : 8.5; grounded = false }
+      if ((keys.Space || jumpQueued) && grounded) { vy = isSwimming ? 7 : 8.5; grounded = false }
+      jumpQueued = false
       if (!grounded) {
         vy -= 22 * dt
         pos.y += vy * dt

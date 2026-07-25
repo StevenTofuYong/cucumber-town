@@ -6,7 +6,11 @@
 <title>Cucumber Town — play with friends</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', Arial, sans-serif; }
+  html, body {
+    height: 100%; overflow: hidden; font-family: 'Segoe UI', Arial, sans-serif;
+    overscroll-behavior: none; -webkit-tap-highlight-color: transparent;
+  }
+  body.touch { touch-action: none; }
   #game { position: fixed; inset: 0; display: block; }
 
   /* ---------- Start screen ---------- */
@@ -70,6 +74,44 @@
     background: rgba(255,255,255,.92); outline: none; display: none;
   }
   #chatHint { font-size: 11px; color: #fff; opacity: .75; text-shadow: 0 1px 2px rgba(0,0,0,.6); margin-top: 4px; }
+
+  /* ---------- Touch controls (phones + tablets) ---------- */
+  #touch { position: fixed; inset: 0; z-index: 12; display: none; pointer-events: none; }
+  body.touch #touch { display: block; }
+  #stick {
+    position: absolute; left: 26px; bottom: 26px; width: 132px; height: 132px;
+    border-radius: 50%; background: rgba(255,255,255,.16); border: 2px solid rgba(255,255,255,.4);
+    pointer-events: auto; touch-action: none;
+  }
+  #stickNub {
+    position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px;
+    border-radius: 50%; background: rgba(255,255,255,.75); box-shadow: 0 2px 8px rgba(0,0,0,.3);
+  }
+  #btns { position: absolute; right: 20px; bottom: 26px; display: flex; flex-direction: column; gap: 12px; align-items: flex-end; }
+  .tbtn {
+    pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none;
+    width: 74px; height: 74px; border-radius: 50%; border: 2px solid rgba(255,255,255,.5);
+    background: rgba(20,40,60,.5); color: #fff; font-size: 15px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.1;
+  }
+  .tbtn:active, .tbtn.on { background: rgba(255,209,102,.75); color: #2d3748; }
+  .tbtn.small { width: 56px; height: 56px; font-size: 13px; }
+  #btnRun { position: absolute; left: 172px; bottom: 34px; }
+
+  /* small screens: shrink the chrome so the game has room */
+  @media (max-width: 820px) {
+    #help { display: none !important; }
+    #roomInfo, #status { font-size: 12px; padding: 5px 10px; }
+    #status { top: 42px; right: auto; left: 12px; }
+    #chat { width: min(260px, 52vw); bottom: 172px; left: 12px; }
+    #chatLog { max-height: 120px; }
+    #chatLog .msg { font-size: 12px; }
+    #chatHint { display: none; }
+    /* keep the prompt clear of the joystick, buttons and chat box */
+    #prompt { top: 78px; bottom: auto; font-size: 14px; padding: 8px 14px; width: max-content; max-width: 88vw; }
+    #startCard { padding: 20px 20px; }
+    #startCard h1 { font-size: 32px; }
+  }
 </style>
 </head>
 <body>
@@ -107,6 +149,16 @@
   <div id="chatLog"></div>
   <input id="chatInput" maxlength="120" placeholder="say something nice… (Enter to send, Esc to close)">
   <div id="chatHint">press Enter to chat</div>
+</div>
+
+<div id="touch">
+  <div id="stick"><div id="stickNub"></div></div>
+  <div class="tbtn small" id="btnRun">RUN</div>
+  <div id="btns">
+    <div class="tbtn small" id="btnChat">💬</div>
+    <div class="tbtn" id="btnE">E</div>
+    <div class="tbtn" id="btnJump">JUMP</div>
+  </div>
 </div>
 
 <script>

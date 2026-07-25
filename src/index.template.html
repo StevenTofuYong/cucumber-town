@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Cucumber Town — play with friends</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', Arial, sans-serif; }
+  #game { position: fixed; inset: 0; display: block; }
+
+  /* ---------- Start screen ---------- */
+  #start {
+    position: fixed; inset: 0; z-index: 20;
+    background: linear-gradient(160deg, #7ec8f2 0%, #a8ddf5 45%, #8fd18b 100%);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #startCard {
+    background: rgba(255,255,255,.94); border-radius: 20px; padding: 28px 34px;
+    width: min(420px, 92vw); box-shadow: 0 18px 50px rgba(0,40,80,.25); text-align: center;
+  }
+  #startCard h1 { font-size: 40px; color: #2b6cb0; letter-spacing: 1px; }
+  #startCard .sub { color: #4a5568; margin: 4px 0 18px; font-size: 14px; }
+  .field { text-align: left; margin-bottom: 14px; }
+  .field label { display: block; font-size: 12px; font-weight: 700; color: #4a5568; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+  .field input {
+    width: 100%; padding: 10px 12px; border: 2px solid #cbd5e0; border-radius: 10px;
+    font-size: 16px; outline: none;
+  }
+  .field input:focus { border-color: #4299e1; }
+  #colors { display: flex; gap: 8px; justify-content: flex-start; }
+  .swatch {
+    width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+    border: 3px solid transparent; transition: transform .1s;
+  }
+  .swatch:hover { transform: scale(1.12); }
+  .swatch.sel { border-color: #2d3748; transform: scale(1.12); }
+  #playBtn {
+    width: 100%; padding: 13px; margin-top: 6px; border: none; border-radius: 12px;
+    background: #38a169; color: #fff; font-size: 20px; font-weight: 800; cursor: pointer;
+    box-shadow: 0 4px 0 #276749;
+  }
+  #playBtn:active { transform: translateY(3px); box-shadow: 0 1px 0 #276749; }
+  #startTip { font-size: 12px; color: #718096; margin-top: 14px; line-height: 1.5; }
+
+  /* ---------- HUD ---------- */
+  .hud { position: fixed; z-index: 10; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #roomInfo { top: 12px; left: 14px; background: rgba(20,40,60,.55); padding: 8px 14px; border-radius: 12px; font-size: 14px; }
+  #roomInfo b { color: #ffd166; }
+  #status { top: 12px; right: 14px; background: rgba(20,40,60,.55); padding: 8px 14px; border-radius: 12px; font-size: 13px; }
+  #help { bottom: 12px; right: 14px; font-size: 12px; text-align: right; opacity: .85; background: rgba(20,40,60,.45); padding: 8px 12px; border-radius: 10px; }
+  #prompt {
+    left: 50%; transform: translateX(-50%); bottom: 96px; display: none;
+    background: rgba(20,40,60,.72); padding: 10px 18px; border-radius: 999px; font-size: 16px;
+  }
+  #prompt b { color: #ffd166; background: rgba(255,255,255,.14); padding: 1px 8px; border-radius: 6px; }
+
+  /* ---------- Chat ---------- */
+  #chat { position: fixed; z-index: 10; left: 14px; bottom: 12px; width: min(340px, 70vw); }
+  #chatLog { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; max-height: 200px; overflow: hidden; }
+  #chatLog .msg {
+    background: rgba(20,40,60,.55); color: #fff; padding: 5px 10px; border-radius: 10px;
+    font-size: 13px; width: fit-content; max-width: 100%; word-wrap: break-word;
+    text-shadow: 0 1px 2px rgba(0,0,0,.5);
+  }
+  #chatLog .msg b { color: #ffd166; }
+  #chatLog .msg.sys { background: rgba(56,161,105,.6); font-style: italic; }
+  #chatInput {
+    width: 100%; padding: 9px 12px; border: none; border-radius: 10px; font-size: 14px;
+    background: rgba(255,255,255,.92); outline: none; display: none;
+  }
+  #chatHint { font-size: 11px; color: #fff; opacity: .75; text-shadow: 0 1px 2px rgba(0,0,0,.6); margin-top: 4px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="start">
+  <div id="startCard">
+    <h1>🥒 Cucumber Town</h1>
+    <div class="sub">your own little roleplay town — walk around &amp; hang out with friends</div>
+    <div class="field">
+      <label>Your name</label>
+      <input id="nameInput" maxlength="16" placeholder="e.g. CoolBuilder123" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Shirt color</label>
+      <div id="colors"></div>
+    </div>
+    <div class="field">
+      <label>Room code (friends must type the same one!)</label>
+      <input id="roomInput" maxlength="24" placeholder="e.g. mystreet42" autocomplete="off">
+    </div>
+    <button id="playBtn">▶ &nbsp;Play</button>
+    <div id="startTip">To play together: send this file (or link) to your friends,<br>and everyone enters the <b>same room code</b>.</div>
+  </div>
+</div>
+
+<div id="roomInfo" class="hud" style="display:none">🥒 Room: <b id="roomName"></b> &nbsp;·&nbsp; <span id="playerCount">1 player</span></div>
+<div id="status" class="hud" style="display:none">connecting…</div>
+<div id="prompt" class="hud"></div>
+<div id="help" class="hud" style="display:none">
+  <b>WASD</b> / arrows — walk &nbsp;·&nbsp; <b>Shift</b> — run &nbsp;·&nbsp; <b>Space</b> — jump<br>
+  <b>E</b> — sit / sleep / drive &nbsp;·&nbsp; <b>drag mouse</b> — look &nbsp;·&nbsp; <b>Enter</b> — chat
+</div>
+<div id="chat" style="display:none">
+  <div id="chatLog"></div>
+  <input id="chatInput" maxlength="120" placeholder="say something nice… (Enter to send, Esc to close)">
+  <div id="chatHint">press Enter to chat</div>
+</div>
+
+<script>
+/*__BUNDLE__*/
+</script>
+</body>
+</html>

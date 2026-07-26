@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import {joinRoom} from 'trystero/nostr'
+import {joinRoom as joinNostr} from 'trystero/nostr'
+import {joinRoom as joinMqtt} from '@trystero-p2p/mqtt'
 
 // ============================================================
 //  Brooktown — a Brookhaven-style mini town you play in the
@@ -9,6 +10,29 @@ import {joinRoom} from 'trystero/nostr'
 const APP_ID = 'cucumbertown-v1'
 const params = new URLSearchParams(location.search)
 const TEST_MODE = params.get('test') === '1'
+const DEV = TEST_MODE || params.get('dev') === '1'
+
+// Matchmaking servers. Trystero would otherwise pick 5 relays at random from a
+// long list of mostly-dead ones, which is why players never found each other.
+// These are the big, well-maintained public nostr relays, pinned explicitly.
+const NOSTR_RELAYS = params.get('relay') ? [params.get('relay')] : [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://relay.nostr.band',
+  'wss://offchain.pub',
+  'wss://relay.snort.social',
+  'wss://nostr.mom',
+  'wss://relay.mostr.pub',
+]
+// A second, completely different network, in case nostr is blocked on someone's wifi
+const MQTT_BROKERS = [
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://test.mosquitto.org:8081/mqtt',
+  'wss://broker.hivemq.com:8884/mqtt',
+]
+// stable id for me, shared across both networks so friends are never duplicated
+const MY_ID = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4)
 
 const SHIRT_COLORS = [0xe53e3e, 0x3182ce, 0x38a169, 0xd69e2e, 0x805ad5, 0xdd6b20, 0x319795, 0xd53f8c]
 const SKIN = 0xf5cd30      // classic Roblox yellow
@@ -933,9 +957,10 @@ function collide() {
 //  MULTIPLAYER
 // ============================================================
 
-let room = null
 let sendState = null
 let sendChatMsg = null
+let chatSeq = 0
+let myRoom = ''
 const peers = new Map() // peerId -> {av, target:{x,y,z,yaw}, moving, name, colorIdx, gotMeta}
 
 const $ = id => document.getElementById(id)
@@ -964,83 +989,163 @@ function addChatLine(html, sys) {
 }
 const esc = s => s.replace(/[<>&"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;'}[c]))
 
-function startMultiplayer(roomCode) {
-  try {
-    room = joinRoom({appId: APP_ID}, roomCode)
-  } catch (err) {
-    console.warn('multiplayer unavailable:', err)
-    setStatus('offline — solo mode', false)
-    return
+// Join the same room on BOTH networks at once. Players are keyed by their own
+// stable id (not the per-network peer id), so a friend reachable on both
+// networks still shows up exactly once.
+const rooms = []
+let liveRelays = 0
+const seenChat = new Set()
+
+function broadcast(action, payload, toPeer) {
+  for (const r of rooms) {
+    // trystero actions are promise-based; a peer dropping mid-send must not throw
+    try { r[action].send(payload, toPeer ? {target: toPeer} : {})?.catch?.(() => {}) } catch (_) {}
   }
-  const [sendS, getS] = room.makeAction('state')
-  const [sendC, getC] = room.makeAction('chat')
-  sendState = sendS
-  sendChatMsg = sendC
-
-  setStatus('online ✓', true)
-
-  room.onPeerJoin(id => {
-    // greet the newcomer with our current state right away
-    sendS(packState(), id)
-  })
-  room.onPeerLeave(id => {
-    const p = peers.get(id)
-    if (p) {
-      addChatLine('<b>' + esc(p.name) + '</b> left the town', true)
-      scene.remove(p.av.group)
-      peers.delete(id)
-      updateCount()
-    }
-  })
-  getS((s, id) => {
-    if (!Array.isArray(s) || s.length < 7) return
-    const [x, y, z, pyaw, moving, colorIdx, name, swim, pose, bodyY, carIdx] = s
-    let p = peers.get(id)
-    if (!p) {
-      const safeName = String(name).slice(0, 16) || 'Friend'
-      const av = makeAvatar(SHIRT_COLORS[colorIdx % SHIRT_COLORS.length], safeName)
-      av.group.position.set(x, y, z)
-      p = {av, target: {x, y, z, yaw: pyaw}, moving: false, name: safeName}
-      peers.set(id, p)
-      addChatLine('<b>' + esc(safeName) + '</b> joined the town! 👋', true)
-      updateCount()
-    }
-    p.target = {x, y, z, yaw: pyaw}
-    p.moving = !!moving
-    p.swim = !!swim
-    p.pose = pose || POSE.WALK
-    p.bodyY = bodyY || 0
-    // someone else is driving: move their car for everyone to see
-    if (p.pose === POSE.DRIVE && carIdx >= 0 && cars[carIdx]) {
-      const car = cars[carIdx]
-      car.busyUntil = performance.now() + 2500
-      car.x = x; car.z = z; car.yaw = pyaw
-      car.group.position.set(x, 0, z)
-      car.group.rotation.y = pyaw
-      updateCarCollider(car)
-    }
-  })
-  getC((msg, id) => {
-    const p = peers.get(id)
-    const name = p ? p.name : 'Friend'
-    const text = String(msg).slice(0, 120)
-    addChatLine('<b>' + esc(name) + ':</b> ' + esc(text))
-    if (p) showBubble(p.av.bubble, text)
-  })
-
-  // broadcast our state ~10x/sec
-  setInterval(() => {
-    if (me && sendState && room.getPeers && Object.keys(room.getPeers()).length > 0) {
-      sendState(packState())
-    }
-  }, 100)
 }
+
+function handleState(s) {
+  if (!Array.isArray(s) || s.length < 12) return
+  const [x, y, z, pyaw, moving, colorIdx, name, swim, pose, bodyY, carIdx, id] = s
+  if (!id || id === MY_ID) return
+  let p = peers.get(id)
+  if (!p) {
+    const safeName = String(name).slice(0, 16) || 'Friend'
+    const av = makeAvatar(SHIRT_COLORS[colorIdx % SHIRT_COLORS.length], safeName)
+    av.group.position.set(x, y, z)
+    p = {av, target: {x, y, z, yaw: pyaw}, moving: false, name: safeName}
+    peers.set(id, p)
+    addChatLine('<b>' + esc(safeName) + '</b> joined the town! 👋', true)
+    updateCount()
+    setStatus('playing together ✓', true)
+  }
+  p.seen = performance.now()
+  p.target = {x, y, z, yaw: pyaw}
+  p.moving = !!moving
+  p.swim = !!swim
+  p.pose = pose || POSE.WALK
+  p.bodyY = bodyY || 0
+  // someone else is driving: move their car for everyone to see
+  if (p.pose === POSE.DRIVE && carIdx >= 0 && cars[carIdx]) {
+    const car = cars[carIdx]
+    car.busyUntil = performance.now() + 2500
+    car.x = x; car.z = z; car.yaw = pyaw
+    car.group.position.set(x, 0, z)
+    car.group.rotation.y = pyaw
+    updateCarCollider(car)
+  }
+}
+
+function handleChat(msg) {
+  if (!msg || typeof msg !== 'object') return
+  const {id, seq, text} = msg
+  if (!id || id === MY_ID) return
+  const key = id + ':' + seq
+  if (seenChat.has(key)) return          // same message arriving via both networks
+  seenChat.add(key)
+  if (seenChat.size > 300) seenChat.clear()
+  const p = peers.get(id)
+  const name = p ? p.name : 'Friend'
+  const clean = String(text).slice(0, 120)
+  addChatLine('<b>' + esc(name) + ':</b> ' + esc(clean))
+  if (p) showBubble(p.av.bubble, clean)
+}
+
+// drop players we stop hearing from (covers leaving, crashing, losing wifi)
+function sweepPeers() {
+  const now = performance.now()
+  for (const [id, p] of peers) {
+    if (now - (p.seen || 0) < 8000) continue
+    addChatLine('<b>' + esc(p.name) + '</b> left the town', true)
+    scene.remove(p.av.group)
+    peers.delete(id)
+    updateCount()
+  }
+}
+
+function startMultiplayer(roomCode) {
+  const networks = [
+    {name: 'nostr', join: joinNostr, config: {appId: APP_ID, relayConfig: {urls: NOSTR_RELAYS}}},
+    {name: 'mqtt', join: joinMqtt, config: {appId: APP_ID, relayConfig: {urls: MQTT_BROKERS}}},
+  ]
+  for (const net of networks) {
+    try {
+      const room = net.join(net.config, roomCode)
+      const stateAction = room.makeAction('s')
+      const chatAction = room.makeAction('c')
+      stateAction.onMessage = payload => handleState(payload)
+      chatAction.onMessage = payload => handleChat(payload)
+      const entry = {room, s: stateAction, c: chatAction}
+      // say hello straight away so the newcomer sees us without waiting a tick
+      room.onPeerJoin = id => {
+        try { stateAction.send(packState(), {target: id})?.catch?.(() => {}) } catch (_) {}
+      }
+      rooms.push(entry)
+    } catch (err) {
+      console.warn('could not join via ' + net.name + ':', err && err.message)
+    }
+  }
+
+  if (!rooms.length) { setStatus('offline — solo mode', false); return }
+  sendState = s => broadcast('s', s)
+  sendChatMsg = text => broadcast('c', {id: MY_ID, seq: chatSeq++, text})
+
+  checkRelays()
+  setInterval(() => { if (me) sendState(packState()) }, 100)
+  setInterval(sweepPeers, 2000)
+}
+
+// Honest status: actually try the matchmaking servers and say what happened,
+// instead of claiming "online" the moment we start trying. (Only the nostr
+// relays are probed — they're plain websockets; the MQTT brokers need a
+// subprotocol handshake and would report false failures.)
+function checkRelays() {
+  const urls = NOSTR_RELAYS
+  let settled = 0
+  const done = () => {
+    settled++
+    if (peers.size) return
+    if (liveRelays > 0) setStatus('online ✓ waiting for friends', true)
+    else if (settled >= urls.length) {
+      setStatus('⚠ trouble connecting', false)
+      addChatLine('Having trouble reaching the matchmaking servers — still trying. ' +
+        'If nobody shows up, try a different wifi or mobile data.', true)
+    }
+  }
+  for (const url of urls) {
+    let ws
+    try { ws = new WebSocket(url) } catch (_) { done(); continue }
+    const timer = setTimeout(() => { try { ws.close() } catch (_) {} ; done() }, 8000)
+    ws.onopen = () => { liveRelays++; clearTimeout(timer); try { ws.close() } catch (_) {} ; done() }
+    ws.onerror = () => { clearTimeout(timer); done() }
+  }
+  setTimeout(() => {
+    if (!peers.size && liveRelays > 0) {
+      addChatLine('Connected. Waiting for a friend to join room <b>' +
+        esc(myRoom) + '</b> — they must type it exactly the same.', true)
+    }
+  }, 12000)
+}
+
+// tiny always-on hook so connection problems can be inspected from the console
+window.__net = () => ({
+  id: MY_ID,
+  room: myRoom,
+  networks: rooms.length,
+  liveRelays,
+  me: [+pos.x.toFixed(1), +pos.z.toFixed(1)],
+  peers: [...peers.entries()].map(([id, p]) => ({
+    id, name: p.name,
+    x: +p.av.group.position.x.toFixed(1),
+    z: +p.av.group.position.z.toFixed(1),
+    pose: p.pose,
+  })),
+})
 
 function packState() {
   return [
     +pos.x.toFixed(2), +pos.y.toFixed(2), +pos.z.toFixed(2),
     +yaw.toFixed(2), isMoving ? 1 : 0, myColorIdx, myName, isSwimming ? 1 : 0,
-    myPose, +myBodyY.toFixed(2), myCar ? myCar.idx : -1,
+    myPose, +myBodyY.toFixed(2), myCar ? myCar.idx : -1, MY_ID,
   ]
 }
 
@@ -1110,6 +1215,7 @@ $('nameInput').value = params.get('name') || ''
 function startGame() {
   myName = ($('nameInput').value.trim() || 'Player' + Math.floor(Math.random() * 99)).slice(0, 16)
   const roomCode = ($('roomInput').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || 'ourtown')
+  myRoom = roomCode
 
   startEl.style.display = 'none'
   for (const id of ['roomInfo', 'help', 'chat', 'status']) $(id).style.display = 'block'
@@ -1126,8 +1232,8 @@ function startGame() {
   me.group.position.copy(pos)
   addChatLine('Welcome to <b>Cucumber Town</b>! Explore the houses &amp; swim in the pond 🥒', true)
 
-  if (TEST_MODE) {
-    setStatus('test mode (solo)', false)
+  if (DEV) {
+    if (TEST_MODE) setStatus('test mode (solo)', false)
     window.__brooktownReady = true
     window.__tp = (x, z, cy, cdist) => {
       pos.x = x; pos.z = z
@@ -1157,7 +1263,8 @@ function startGame() {
         pos.z > c.minZ - 1.5 && pos.z < c.maxZ + 1.5
       ).map(c => [c.minX, c.maxX, c.minZ, c.maxZ].map(v => +v.toFixed(2))),
     })
-  } else {
+  }
+  if (!TEST_MODE) {
     setStatus('connecting…', false)
     startMultiplayer(roomCode)
   }

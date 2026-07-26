@@ -31,6 +31,18 @@ Walk into a house and the roof lifts off so you can see the whole room.
 Walk into the pond and you start swimming. Press `E` next to a car to drive it
 (`W`/`S` to go and reverse, `A`/`D` to steer).
 
+## If you can't see each other
+
+- The room code must match **exactly** — it's lowercased and stripped of spaces
+  and symbols, so `Our Town!` and `ourtown` are the same, but `ourtown2` is not.
+- The top-right corner tells you what's happening: *connecting…*, then
+  *online ✓ waiting for friends*, then *playing together ✓* once someone joins.
+  Finding each other usually takes 5–15 seconds.
+- If it says *trouble connecting*, the matchmaking servers are blocked on that
+  network. School and office wifi often block them — try mobile data or home wifi.
+- Type `__net()` in the browser console to see the room, how many networks are
+  connected, and who the game can currently see.
+
 ## How it works
 
 - 3D graphics: [three.js](https://threejs.org)
